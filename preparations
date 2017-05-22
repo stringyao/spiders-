@@ -1,0 +1,214 @@
+import requests
+from bs4 import BeautifulSoup
+import csv
+import re
+import urllib.request
+
+# 爬取中财网上市公司各类别信息首先要解决的一点是其url，
+# 类似的腾讯、新浪等财经网站的url非常简单，唯一变动的只是股票代码，
+# 然而中财网的url中另外添加了一个代码，这个代码才是区分不同公司的指标。
+
+# 以公司公告为例，这里给出几个url样本：
+# http://gg.cfi.cn/ggqw/1/000001.html
+# http://gg.cfi.cn/ggqw/11/000012.html
+# http://gg.cfi.cn/ggqw/256/000687.html
+
+# 该编码从1开始，但并不连续，很难发现有什么规律在里面，因此首先必须取得所有上市公司在中财网的编码
+# 在此之前，先得到所有最新的股票代码
+
+def get_codes(market_lst):
+
+    codes = {}
+    
+    for market in market_lst:
+        
+        if market == 'SH':
+            n = '11'
+        if market == 'SZ':
+            n = '12'
+        if market == 'ZXB':
+            n = '13'
+        if market == 'CYB':
+            n = '14'
+    
+        url = "http://quote.cfi.cn/stockList.aspx?t=" + n
+        
+        response = requests.get(url)
+        html = response.content
+        html = html.decode('utf-8')
+        soup = BeautifulSoup(html, "html.parser")
+                
+        table = soup.find('table', {'style': 'width:100%;'})
+        
+        bcols = []
+        rows = []
+                
+        for row in table.findAll('tr'):
+            bcols = row.find_all('td')
+            bcols = [ele.text.strip() for ele in bcols]
+            rows.append(bcols)
+        
+        for i in rows:
+            for ii in i:
+                name = ii.split('(')[0]
+                ID = ii.split('(')[1].split(')')[0]
+                
+                if n == '12' and ID[:3] != '000':
+                    
+                    continue
+                        
+                else:
+                
+                    codes[ID] = name
+            
+    #print(codes.keys())
+    return codes
+    
+# 该函数参数为一个包含市场代码的列表：['SH', 'SZ', 'ZXB' 'CYB']
+# 能够返回该市场的所有股票代码及公司名称组成的字典
+    
+# 接下来，利用股票代码来获取其在中财网的对应编码
+# 由于每次都重新获得编码速度较慢，且中财网编码预计在很长的一段时间内都不会改变，
+# 这里将股票代码和中财网编码全都存成csv文件，以后只需每日更新新股的代码和编码即可
+
+# 先将公司代码及名称存在本地csv文件
+# 格式为
+# 000001，平安银行
+# 000002，XXXX
+
+def id_to_csv(address, market_id):
+    
+    file = open(address, 'w', encoding = 'utf-8')
+    
+    codes = get_codes(market_id)
+    
+    for ID in codes:
+        file.write(ID)
+        file.write(",")
+        file.write(codes[ID])
+        file.write("\n")
+        
+    file.close()
+    
+    print("Done.")
+    
+# 有了本地csv文件后，就可以利用代码来获得中财网编码
+        
+def get_cfi_keys(address1, address2, address3):
+    
+    # address1: 股票代码的文件
+    # address2：存放中财网代码的文件
+    # address3：存放未能成功获取的公司的代码的文件
+    
+    error_file = open(address3, 'w', encoding = 'utf-8')
+
+    with open(address1,'r',encoding = 'utf-8') as f:
+        
+        reader = csv.reader(f)
+        
+        file = open(address2,'w',encoding='utf-8')
+        
+        for i in reader:
+            
+            url = "http://quote.cfi.cn/" + i[0] + ".html"
+            
+            with urllib.request.urlopen(url) as response:
+                html = response.read().decode('utf-8')
+               
+            #obj = BeautifulSoup(html, "lxml")
+                	
+            regex = '<a href=".+" target="_self">'
+            
+            pattern = re.compile(regex)
+            	
+            info = re.findall(pattern,html)
+            
+            try:
+            	
+                code = info[0].split("stockid=")[1].split("&")[0]    
+                
+                file.write(code)
+                file.write(',')
+                file.write(i[0])
+                file.write("\n")
+                
+                print(code + "," + i[0])
+                
+            except:
+                
+                print("Unable to get the key of" + i[0])
+                error_file.write(i[0])
+                error_file.write("\n")
+                
+        file.close()
+        error_file.close()
+        
+    print("Done")
+
+# 更新每天新上市的公司的代码和中财网编码
+
+def update_cfi_keys(address1, address2):
+
+    # address1: 股票代码的文件
+    # address2：存放中财网代码的文件
+
+    dic = {}
+    new_codes = []
+    tup = ()
+
+    try:
+        with open(address1,'r',encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                dic[row[0]] = row[1]
+    except:
+        print("CANT OPEN THE FILE")
+        
+    tup = tuple(dic.keys())
+    
+    codes = get_codes(['SH', 'SZ', 'ZXB', 'CYB'])
+       
+    for i in codes.keys():
+        if i not in tup:
+            new_codes.append(i)
+    
+    file = open(address2,'a',encoding='utf-8')
+    
+    try:
+        for i in new_codes:
+            
+            url = "http://quote.cfi.cn/" + str(i) + ".html"
+            
+            with urllib.request.urlopen(url) as response:
+                html = response.read().decode('utf-8')
+               
+            #obj = BeautifulSoup(html, "lxml")
+                	
+            regex = '<a href=".+" target="_self">'
+            
+            pattern = re.compile(regex)
+            	
+            info = re.findall(pattern,html)
+            
+            try:
+            	
+                code = info[0].split("stockid=")[1].split("&")[0]    
+                
+                file.write(code)
+                file.write(',')
+                file.write(i)
+                file.write("\n")
+                
+                print(code + "," + i)
+                
+            except:
+                
+                print("Unable to get the key of" + i)
+            
+        file.close()
+        print("Updates completed")
+        
+    except:
+        print("Internet connection error, plz try again")
+    
+# 至此，准备工作基本完成
